@@ -11,7 +11,6 @@ app.include_router(v1_router, prefix="/api/v1")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=['*'],  # Use ["*"] temporarily for testing
-    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )

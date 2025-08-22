@@ -9,9 +9,9 @@ KLING_AI_TASK_STATUS_URL = f"{KLING_AI_API_BASE_URL}/v1/videos/multi-image2video
 ACCESS_KEY = os.getenv("ACCESS_KEY") or ""
 SECRET_KEY = os.getenv("SECRET_KEY") or ""
 SQLALCHEMY_DATABASE_URL = os.getenv("SQLALCHEMY_DATABASE_URL") or ""
-
-Shopify_Base_URL = os.getenv("Shopify_Base_URL") or ""
-X_Shopify_Access_Token = os.getenv("X_Shopify_Access_Token") or ""
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY") or ""
+CLIENT_URL = os.getenv("CLIENT_URL") or ""
+STRIPE_WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET") or ""
 
 STAGED_UPLOADS_CREATE = """
 mutation StagedUploadsCreate($input: [StagedUploadInput!]!) {

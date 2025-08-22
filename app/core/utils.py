@@ -1,10 +1,12 @@
+from datetime import datetime
 import time
 import os
+from app.db.session import SessionLocal
 import cv2
 import requests
 import httpx
 import tempfile
-import mimetypes
+from app.db.models.credits import Credits
 import base64
 from jwt import encode
 
@@ -78,3 +80,30 @@ def get_thumbnail_from_url(url: str) -> str:
     # Step 5: Convert to base64
     base64_image = base64.b64encode(buffer).decode("utf-8")
     return base64_image
+
+def checkIfAvailable(shop: str) -> bool:
+    db = SessionLocal()
+    credits = db.query(Credits).filter(Credits.shop_name == shop).first()
+
+    if not credits:
+        return False
+    else:
+        if not credits.subscription_expired or credits.subscription_expired < datetime.now():
+            return credits.extra_credit > 0
+        else:
+            return credits.extra_credit > 0 or credits.monthly_credit > 0
+
+def updateCredits(shop: str):
+    db = SessionLocal()
+    credits = db.query(Credits).filter(Credits.shop_name == shop).first()
+
+    if credits:
+        if not credits.subscription_expired or credits.subscription_expired < datetime.now():
+            if credits.extra_credit > 0:
+                credits.extra_credit = credits.extra_credit - 1
+        else:
+            if credits.monthly_credit > 0:
+                credits.monthly_credit = credits.monthly_credit - 1
+            elif credits.extra_credit > 0:
+                credits.extra_credit = credits.extra_credit - 1
+        db.commit()

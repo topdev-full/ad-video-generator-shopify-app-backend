@@ -3,19 +3,23 @@ import requests
 import os
 import mimetypes
 import asyncio
-from fastapi import APIRouter, HTTPException, Depends, Query
+import stripe
+from fastapi import APIRouter, HTTPException, Depends, Query, Request
 from sqlalchemy.orm import Session
 from typing import List, Dict, Any
-from app.core.constants import KLING_AI_TASK_STATUS_URL, KLING_AI_GENERATE_URL, ACCESS_KEY, SECRET_KEY, Shopify_Base_URL, X_Shopify_Access_Token
-from app.core.constants import FILE_STATUS, STAGED_UPLOADS_CREATE, FILE_CREATE, FILE_UPDATE_ADD_PRODUCT
+from app.core.constants import KLING_AI_TASK_STATUS_URL, KLING_AI_GENERATE_URL, ACCESS_KEY, SECRET_KEY, STRIPE_SECRET_KEY
+from app.core.constants import FILE_STATUS, STAGED_UPLOADS_CREATE, FILE_CREATE, FILE_UPDATE_ADD_PRODUCT, STRIPE_WEBHOOK_SECRET
 from app.core.utils import get_size_and_download, encode_jwt_token
 from app.crud.video import create_video
 from app.db.deps import get_db
 from app.db.models.video import Video
-from app.schema.video import VideoSummary, GenerateVideoRequest, VideoUploadRequest
-from app.core.utils import get_thumbnail_from_url
+from app.db.models.credits import Credits
+from app.schema.video import ShopNamePayload, VideoSummary, GenerateVideoRequest, VideoUploadRequest, CreateSessionRequest
+from app.core.utils import get_thumbnail_from_url, checkIfAvailable, updateCredits
+from datetime import datetime, timedelta
 
 router = APIRouter()
+stripe.api_key = STRIPE_SECRET_KEY
 
 @router.get("/")
 def root():
@@ -94,6 +98,9 @@ async def update_video(video_id: str, db: Session = Depends(get_db)):
 
 @router.post("/video")
 async def generate_video(body: GenerateVideoRequest, db: Session = Depends(get_db)):
+    if not checkIfAvailable(body.shop):
+        raise HTTPException(status_code=403, detail=f"Not Enough Credits. Charge credits.")
+
     payload: Dict[str, Any] = {
         "image_list": [],
         "prompt": body.prompt,
@@ -122,31 +129,14 @@ async def generate_video(body: GenerateVideoRequest, db: Session = Depends(get_d
 
         create_video(db, data['data']['task_id'], images, body.prompt, body.product_id, body.shop)
 
+        updateCredits(body.shop)
         return data
     except httpx.HTTPStatusError as exc:
         raise HTTPException(status_code=exc.response.status_code, detail=str(exc))
     except httpx.RequestError as exc:
         raise HTTPException(status_code=502, detail=f"Error contacting third-party API: {str(exc)}")
 
-@router.get('/products')
-async def get_products():
-    try:
-        headers = {
-            "X-Shopify-Access-Token": X_Shopify_Access_Token
-        }
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(
-                f"{Shopify_Base_URL}/admin/api/2024-07/products.json?limit=250",
-                headers=headers
-            )
-        response.raise_for_status()
-        data = response.json()
-        print(data)
-        return data
-    except httpx.HTTPStatusError as exc:
-        raise HTTPException(status_code=exc.response.status_code, detail=str(exc))
-
-async def gql(GQL_URL, HEADERS, client: httpx.AsyncClient, query: str, variables: Dict[str, Any]):
+async def gql(GQL_URL: str, HEADERS: Any, client: httpx.AsyncClient, query: str, variables: Dict[str, Any]):
     r = await client.post(GQL_URL, headers=HEADERS, json={"query": query, "variables": variables})
     req_id = r.headers.get("X-Request-Id")
     if r.status_code >= 400:
@@ -156,8 +146,7 @@ async def gql(GQL_URL, HEADERS, client: httpx.AsyncClient, query: str, variables
         raise HTTPException(502, {"message": "Shopify GraphQL error", "errors": data["errors"], "x_request_id": req_id})
     return {"data": data["data"], "x_request_id": req_id}
 
-
-async def wait_until_ready(GQL_URL, HEADERS, client: httpx.AsyncClient, file_id: str, timeout_s: int = 300):
+async def wait_until_ready(GQL_URL: str, HEADERS: Any, client: httpx.AsyncClient, file_id: str, timeout_s: int = 300):
     start = asyncio.get_event_loop().time()
     while True:
         d = await gql(GQL_URL, HEADERS, client, FILE_STATUS, {"id": file_id})
@@ -265,4 +254,126 @@ async def upload_video(payload: VideoUploadRequest, db: Session = Depends(get_db
         video.status = "completed"
         db.commit()
         db.refresh(video)
+        raise e
+
+@router.post('/subscription')
+async def create_subscription(db: Session = Depends(get_db)):
+    try:
+        pass
+    except Exception as e:
+        raise e
+
+@router.post('/stripe-hook')
+async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
+    sig_header = request.headers.get("stripe-signature")
+    body = await request.body()
+    try:
+        event = stripe.Webhook.construct_event(body, sig_header, STRIPE_WEBHOOK_SECRET)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    type_ = event["type"]
+    data = event["data"]["object"]
+
+    # On checkout completed, you can link customer to user
+    if type_ == "checkout.session.completed":
+        shop_id = data.get("client_reference_id")
+        print("shop_id:", shop_id)
+        line_items = stripe.checkout.Session.list_line_items(data["id"], limit=100)
+        print("line_items:", line_items['data'])
+        price_id, product_id, quantity, amount = line_items['data'][0]['price']['id'], line_items['data'][0]['price']['product'], line_items['data'][0]['quantity'], line_items['data'][0]['price']['unit_amount']
+        print("line_items:", price_id, product_id, quantity, amount)
+        if product_id == "prod_Su4INfJofTlANV": # extra credit
+            credits = db.query(Credits).filter(Credits.shop_name == shop_id).first()
+            if not credits:
+                credits = Credits(
+                    shop_name=shop_id,
+                    extra_credit=quantity,
+                )
+                db.add(credits)
+                db.commit()
+            else:
+                credits.extra_credit = credits.extra_credit + quantity
+                db.commit()
+        else:
+            credits = db.query(Credits).filter(Credits.shop_name == shop_id).first()
+            if not credits:
+                credits = Credits(
+                    shop_name=shop_id,
+                    monthly_credit=amount/140,
+                    subscription_type=(1 if amount == 14000 else (2 if amount == 35000 else 3)),
+                    subscription_expired=datetime.now()+timedelta(days=30)
+                )
+                db.add(credits)
+                db.commit()
+            else:
+                credits.monthly_credit = amount / 140
+                credits.subscription_type=(1 if amount == 14000 else (2 if amount == 35000 else 3))
+                credits.subscription_expired=datetime.now()+timedelta(days=30)
+                db.commit()
+
+@router.post('/create-checkout-session')
+async def create_checkout_session(payload: CreateSessionRequest, db: Session = Depends(get_db)):
+    try:
+        line_item = None
+        if payload.plan == "template-1":
+            line_item = stripe.checkout.Session.CreateParamsLineItem({
+                "price": "price_1RyG9396qwFkAOsoc3dJW8kz",
+                "quantity": 1
+            })
+        elif payload.plan == "template-2":
+            line_item = stripe.checkout.Session.CreateParamsLineItem({
+                "price": "price_1RyG9W96qwFkAOsomQlAs3MV",
+                "quantity": 1
+            })
+        elif payload.plan == "template-3":
+            line_item = stripe.checkout.Session.CreateParamsLineItem({
+                "price": "price_1RyG9o96qwFkAOsojank6DtR",
+                "quantity": 1
+            })
+        else:
+            line_item = stripe.checkout.Session.CreateParamsLineItem({
+                "price": "price_1RyGAC96qwFkAOsorujppUrp",
+                "quantity": payload.credits
+            })
+        session = stripe.checkout.Session.create(
+            mode="payment",
+            payment_method_types=['card'],
+            line_items=[line_item],
+            success_url=payload.redirectUrl,
+            cancel_url=payload.redirectUrl,
+            client_reference_id=payload.shop,
+            customer_creation='if_required',
+            allow_promotion_codes=False
+        )
+        return {"id": session.id}
+    except Exception as e:
+        raise e
+
+@router.post('/credits')
+async def get_credits(payload: ShopNamePayload, db: Session = Depends(get_db)):
+    credits = db.query(Credits).filter(Credits.shop_name == payload.shop).first()
+
+    if not credits:
+        return {
+            "extra_credit": 0,
+            "monthly_credit": 0,
+            "subscription_type": -1,
+            "subscription_expired": None,
+            "active_subscription": False
+        }
+
+    return {
+        "extra_credit": credits.extra_credit,
+        "monthly_credit": credits.monthly_credit,
+        "subscription_type": credits.subscription_type,
+        "subscription_expired": credits.subscription_expired,
+        "active_subscription": datetime.now() <= credits.subscription_expired if credits.subscription_expired else False
+    }
+
+@router.post('/expire-subscription')
+async def expire_subscription(db: Session = Depends(get_db)):
+    try:
+        pass
+    except Exception as e:
         raise e

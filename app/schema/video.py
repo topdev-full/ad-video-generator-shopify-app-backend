@@ -27,3 +27,12 @@ class VideoUploadRequest(BaseModel):
     video_id: str
     video_url: str
     product_id: str
+
+class CreateSessionRequest(BaseModel):
+    shop: str
+    plan: str
+    credits: int
+    redirectUrl: str
+
+class ShopNamePayload(BaseModel):
+    shop: str
