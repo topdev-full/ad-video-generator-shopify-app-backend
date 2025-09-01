@@ -124,6 +124,7 @@ async def generate_video(body: GenerateVideoRequest, db: Session = Depends(get_d
                 json=payload,
                 headers=headers
             )
+        print(response.json())
         response.raise_for_status()
         data = response.json()
 
@@ -132,6 +133,7 @@ async def generate_video(body: GenerateVideoRequest, db: Session = Depends(get_d
         updateCredits(body.shop)
         return data
     except httpx.HTTPStatusError as exc:
+        print(exc)
         raise HTTPException(status_code=exc.response.status_code, detail=str(exc))
     except httpx.RequestError as exc:
         raise HTTPException(status_code=502, detail=f"Error contacting third-party API: {str(exc)}")
