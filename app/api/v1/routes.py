@@ -96,6 +96,59 @@ async def update_video(video_id: str, db: Session = Depends(get_db)):
     except httpx.RequestError as exc:
         raise HTTPException(status_code=502, detail=f"Error contacting third-party API: {str(exc)}")
 
+@router.post("/regenerate/{video_id}")
+async def regenerate_video(video_id: str, db: Session = Depends(get_db)):
+    try:
+        video = db.query(Video).filter(Video.id == video_id).first()
+        if not video:
+            raise HTTPException(status_code=404, detail="Video not found")
+        video.video_id = ''
+        video.video_url = ''
+        video.thumbnail = ''
+        video.status = 'processing'
+        video.duration = 5
+        video.created_at = datetime.now()
+
+        images = [
+            video.image1,
+            video.image2,
+            video.image3,
+            video.image4
+        ]
+
+        payload: Dict[str, Any] = {
+            "image_list": [],
+            "prompt": video.prompt,
+            "aspect_ratio": "1:1"
+        }
+        headers = {
+            "Authorization": f"Bearer {encode_jwt_token(ACCESS_KEY, SECRET_KEY)}"
+        }
+        for image in images:
+            if image != "":
+                payload["image_list"].append({
+                    "image": image
+                })
+        
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                KLING_AI_GENERATE_URL,
+                json=payload,
+                headers=headers
+            )
+        print(response.json())
+        response.raise_for_status()
+        data = response.json()
+
+        video.id = data['data']['task_id']
+        db.commit()
+        db.refresh(video)
+
+        updateCredits(video.shop)
+        return data
+    except Exception as exc:
+        raise exc
+    
 @router.post("/video")
 async def generate_video(body: GenerateVideoRequest, db: Session = Depends(get_db)):
     if not checkIfAvailable(body.shop):
