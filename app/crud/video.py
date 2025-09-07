@@ -2,10 +2,11 @@ from sqlalchemy.orm import Session
 from app.db.models.video import Video
 from typing import List
 
-def create_video(db: Session, id: str, images: List[str], prompt: str, product_id: str, shop: str):
+def create_video(db: Session, id: str, images: List[str], prompt: str, product_id: str, product_title: str, shop: str):
     video = Video(
         id = id,
         product_id = product_id,
+        product_title = product_title,
         shop = shop,
         image1 = images[0] if len(images) > 0 else "",
         image2 = images[1] if len(images) > 1 else "",

@@ -5,3 +5,5 @@ db.sqlite3
 *.mp4
 
 .vscode
+
+static/*.png

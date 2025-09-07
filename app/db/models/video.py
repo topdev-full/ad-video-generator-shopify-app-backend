@@ -8,6 +8,7 @@ class Video(Base):
 
     id: Mapped[str] = mapped_column(primary_key=True)
     product_id: Mapped[str] = mapped_column(nullable=False)
+    product_title: Mapped[str] = mapped_column(nullable=False)
     video_id: Mapped[str] = mapped_column(nullable=True)
     shop: Mapped[str] = mapped_column(nullable=False)
     image1: Mapped[str] = mapped_column(nullable=False)

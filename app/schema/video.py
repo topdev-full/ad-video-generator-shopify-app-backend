@@ -6,6 +6,7 @@ from datetime import datetime
 class VideoSummary(BaseModel):
     id: str
     product_id: str
+    product_title: str
     video_url: Optional[str]
     status: str
     duration: float
@@ -18,6 +19,7 @@ class VideoSummary(BaseModel):
 class GenerateVideoRequest(BaseModel):
     prompt: str
     product_id: str
+    product_title: str
     images: List[str]
     shop: str
 
@@ -27,6 +29,7 @@ class VideoUploadRequest(BaseModel):
     video_id: str
     video_url: str
     product_id: str
+    product_title: str
 
 class CreateSessionRequest(BaseModel):
     shop: str

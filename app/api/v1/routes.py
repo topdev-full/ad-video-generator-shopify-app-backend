@@ -17,6 +17,9 @@ from app.db.models.credits import Credits
 from app.schema.video import ShopNamePayload, VideoSummary, GenerateVideoRequest, VideoUploadRequest, CreateSessionRequest
 from app.core.utils import get_thumbnail_from_url, checkIfAvailable, updateCredits
 from datetime import datetime, timedelta
+import uuid
+import numpy as np
+import cv2
 
 router = APIRouter()
 stripe.api_key = STRIPE_SECRET_KEY
@@ -163,14 +166,27 @@ async def generate_video(body: GenerateVideoRequest, db: Session = Depends(get_d
         "Authorization": f"Bearer {encode_jwt_token(ACCESS_KEY, SECRET_KEY)}"
     }
 
-    for image in body.images:
-        payload["image_list"].append({
-            "image": image
-        })
-
-    images = [img_dict["image"] for img_dict in payload["image_list"]]
 
     try:
+        # Convert image to PNG files
+
+        for image in body.images:
+            file_name = f"{str(uuid.uuid4())}.png"
+
+            response = requests.get(image)
+            response.raise_for_status()
+
+            img_array = np.asarray(bytearray(response.content), dtype=np.uint8)
+            img = cv2.imdecode(img_array, cv2.IMREAD_UNCHANGED)
+
+            cv2.imwrite(f"static/{file_name}", img)
+
+            payload["image_list"].append({
+                "image": f"https://lookmotion.ai/static/{file_name}"
+            })
+
+        images = [img_dict["image"] for img_dict in payload["image_list"]]
+
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.post(
                 KLING_AI_GENERATE_URL,
@@ -181,7 +197,7 @@ async def generate_video(body: GenerateVideoRequest, db: Session = Depends(get_d
         response.raise_for_status()
         data = response.json()
 
-        create_video(db, data['data']['task_id'], images, body.prompt, body.product_id, body.shop)
+        create_video(db, data['data']['task_id'], images, body.prompt, body.product_id, body.product_title, body.shop)
 
         updateCredits(body.shop)
         return data
@@ -232,7 +248,7 @@ async def upload_video(payload: VideoUploadRequest, db: Session = Depends(get_db
 
         size, file_path = await get_size_and_download(payload.video_url)
 
-        filename = os.path.basename(file_path) or "video.mp4"
+        filename = f"{payload.product_title}.mp4"
         mime = mimetypes.guess_type(filename)[0] or "video/mp4"
 
         product_gid = f"{payload.product_id}"
@@ -288,7 +304,7 @@ async def upload_video(payload: VideoUploadRequest, db: Session = Depends(get_db
 
             # 5) attach to product
             d3 = await gql(GQL_URL, HEADERS, client, FILE_UPDATE_ADD_PRODUCT, {
-                "files": [{"id": file_id, "referencesToAdd": [product_gid]}]
+                "files": [{"id": file_id, "alt": payload.product_title, "referencesToAdd": [product_gid]}]
             })
             fu = d3["data"]["fileUpdate"]
             if fu["userErrors"]:
